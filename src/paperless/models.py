@@ -77,6 +77,7 @@ class ColorConvertChoices(models.TextChoices):
 class LLMEmbeddingBackend(models.TextChoices):
     OPENAI = ("openai", _("OpenAI"))
     HUGGINGFACE = ("huggingface", _("Huggingface"))
+    GEMINI = ("gemini", _("Gemini"))
 
 
 class LLMBackend(models.TextChoices):
@@ -85,6 +86,17 @@ class LLMBackend(models.TextChoices):
     """
 
     OPENAI = ("openai", _("OpenAI"))
+    OLLAMA = ("ollama", _("Ollama"))
+    GEMINI = ("gemini", _("Gemini"))
+
+
+class LLMOcrBackend(models.TextChoices):
+    """
+    Backend choices for LLM-based OCR
+    """
+
+    OPENAI = ("openai", _("OpenAI"))
+    GEMINI = ("gemini", _("Gemini"))
     OLLAMA = ("ollama", _("Ollama"))
 
 
@@ -334,6 +346,45 @@ class ApplicationConfiguration(AbstractSingletonModel):
 
     llm_endpoint = models.CharField(
         verbose_name=_("Sets the LLM endpoint, optional"),
+        blank=True,
+        null=True,
+        max_length=256,
+    )
+
+    """
+    LLM OCR settings
+    """
+
+    llm_ocr_enabled = models.BooleanField(
+        verbose_name=_("Enables LLM OCR"),
+        null=True,
+        default=False,
+    )
+
+    llm_ocr_backend = models.CharField(
+        verbose_name=_("Sets the LLM OCR backend"),
+        blank=True,
+        null=True,
+        max_length=128,
+        choices=LLMOcrBackend.choices,
+    )
+
+    llm_ocr_model = models.CharField(
+        verbose_name=_("Sets the LLM OCR model"),
+        blank=True,
+        null=True,
+        max_length=128,
+    )
+
+    llm_ocr_api_key = models.CharField(
+        verbose_name=_("Sets the LLM OCR API key"),
+        blank=True,
+        null=True,
+        max_length=1024,
+    )
+
+    llm_ocr_endpoint = models.CharField(
+        verbose_name=_("Sets the LLM OCR endpoint, optional"),
         blank=True,
         null=True,
         max_length=256,

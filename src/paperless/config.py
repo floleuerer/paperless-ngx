@@ -207,3 +207,36 @@ class AIConfig(BaseConfig):
     @property
     def llm_index_enabled(self) -> bool:
         return bool(self.ai_enabled and self.llm_embedding_backend)
+
+
+@dataclasses.dataclass
+class LlmOcrConfig(BaseConfig):
+    """
+    LLM OCR related settings
+    """
+
+    llm_ocr_enabled: bool = dataclasses.field(init=False)
+    llm_ocr_backend: str = dataclasses.field(init=False)
+    llm_ocr_model: str = dataclasses.field(init=False)
+    llm_ocr_api_key: str = dataclasses.field(init=False)
+    llm_ocr_endpoint: str = dataclasses.field(init=False)
+
+    def __post_init__(self) -> None:
+        app_config = self._get_config_instance()
+
+        self.llm_ocr_enabled = (
+            app_config.llm_ocr_enabled or settings.LLM_OCR_ENABLED
+        )
+        self.llm_ocr_backend = (
+            app_config.llm_ocr_backend or settings.LLM_OCR_BACKEND
+        )
+        self.llm_ocr_model = app_config.llm_ocr_model or settings.LLM_OCR_MODEL
+        self.llm_ocr_api_key = (
+            app_config.llm_ocr_api_key or settings.LLM_OCR_API_KEY
+        )
+        self.llm_ocr_endpoint = (
+            app_config.llm_ocr_endpoint or settings.LLM_OCR_ENDPOINT
+        )
+
+    def is_enabled(self) -> bool:
+        return bool(self.llm_ocr_enabled and self.llm_ocr_backend)

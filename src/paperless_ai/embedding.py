@@ -6,6 +6,7 @@ if TYPE_CHECKING:
 
 from django.conf import settings
 from llama_index.core.base.embeddings.base import BaseEmbedding
+from llama_index.embeddings.google_genai import GoogleGenAIEmbedding
 from llama_index.embeddings.huggingface import HuggingFaceEmbedding
 from llama_index.embeddings.openai import OpenAIEmbedding
 
@@ -15,19 +16,35 @@ from paperless.config import AIConfig
 from paperless.models import LLMEmbeddingBackend
 
 
+DEFAULT_MODELS = {
+    "openai": "text-embedding-3-small",
+    "gemini": "gemini-embedding-001",
+    "huggingface": "sentence-transformers/all-MiniLM-L6-v2",
+}
+
 def get_embedding_model() -> BaseEmbedding:
     config = AIConfig()
+
+    model = config.llm_embedding_model or DEFAULT_MODELS.get(
+        config.llm_embedding_backend
+    )
 
     match config.llm_embedding_backend:
         case LLMEmbeddingBackend.OPENAI:
             return OpenAIEmbedding(
-                model=config.llm_embedding_model or "text-embedding-3-small",
+                model=model,
                 api_key=config.llm_api_key,
             )
         case LLMEmbeddingBackend.HUGGINGFACE:
             return HuggingFaceEmbedding(
-                model_name=config.llm_embedding_model
-                or "sentence-transformers/all-MiniLM-L6-v2",
+                model_name=model,
+            )
+        case LLMEmbeddingBackend.GEMINI:
+            return GoogleGenAIEmbedding(
+                model_name=model,
+                api_key=config.llm_api_key,
+                embed_batch_size=100,
+                output_dimensionality=1536,
             )
         case _:
             raise ValueError(
@@ -41,10 +58,8 @@ def get_embedding_dim() -> int:
     from a dummy embedding and stores it for future use.
     """
     config = AIConfig()
-    model = config.llm_embedding_model or (
-        "text-embedding-3-small"
-        if config.llm_embedding_backend == "openai"
-        else "sentence-transformers/all-MiniLM-L6-v2"
+    model = config.llm_embedding_model or DEFAULT_MODELS.get(
+        config.llm_embedding_backend
     )
 
     meta_path: Path = settings.LLM_INDEX_DIR / "meta.json"

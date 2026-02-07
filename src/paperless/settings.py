@@ -347,6 +347,7 @@ INSTALLED_APPS = [
     "paperless_text.apps.PaperlessTextConfig",
     "paperless_mail.apps.PaperlessMailConfig",
     "paperless_remote.apps.PaperlessRemoteParserConfig",
+    "paperless_llm.apps.PaperlessLlmConfig",
     "django.contrib.admin",
     "rest_framework",
     "rest_framework.authtoken",
@@ -1457,7 +1458,16 @@ LLM_EMBEDDING_BACKEND = os.getenv(
     "PAPERLESS_AI_LLM_EMBEDDING_BACKEND",
 )  # "huggingface" or "openai"
 LLM_EMBEDDING_MODEL = os.getenv("PAPERLESS_AI_LLM_EMBEDDING_MODEL")
-LLM_BACKEND = os.getenv("PAPERLESS_AI_LLM_BACKEND")  # "ollama" or "openai"
+LLM_BACKEND = os.getenv("PAPERLESS_AI_LLM_BACKEND")  # "ollama", "openai", or "gemini"
 LLM_MODEL = os.getenv("PAPERLESS_AI_LLM_MODEL")
 LLM_API_KEY = os.getenv("PAPERLESS_AI_LLM_API_KEY")
 LLM_ENDPOINT = os.getenv("PAPERLESS_AI_LLM_ENDPOINT")
+
+################################################################################
+# LLM OCR Settings                                                             #
+################################################################################
+LLM_OCR_ENABLED = __get_boolean("PAPERLESS_LLM_OCR_ENABLED", "NO")
+LLM_OCR_BACKEND = os.getenv("PAPERLESS_LLM_OCR_BACKEND")  # "openai", "gemini", or "ollama"
+LLM_OCR_MODEL = os.getenv("PAPERLESS_LLM_OCR_MODEL")
+LLM_OCR_API_KEY = os.getenv("PAPERLESS_LLM_OCR_API_KEY")
+LLM_OCR_ENDPOINT = os.getenv("PAPERLESS_LLM_OCR_ENDPOINT")

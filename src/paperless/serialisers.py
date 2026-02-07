@@ -210,6 +210,10 @@ class ApplicationConfigurationSerializer(serializers.ModelSerializer):
         required=False,
         allow_null=True,
     )
+    llm_ocr_api_key = ObfuscatedPasswordField(
+        required=False,
+        allow_null=True,
+    )
 
     def run_validation(self, data):
         # Empty strings treated as None to avoid unexpected behavior
@@ -224,6 +228,11 @@ class ApplicationConfigurationSerializer(serializers.ModelSerializer):
                 data["llm_api_key"] = None
             elif len(data["llm_api_key"].replace("*", "")) == 0:
                 del data["llm_api_key"]
+        if "llm_ocr_api_key" in data and data["llm_ocr_api_key"] is not None:
+            if data["llm_ocr_api_key"] == "":
+                data["llm_ocr_api_key"] = None
+            elif len(data["llm_ocr_api_key"].replace("*", "")) == 0:
+                del data["llm_ocr_api_key"]
         return super().run_validation(data)
 
     def update(self, instance, validated_data):

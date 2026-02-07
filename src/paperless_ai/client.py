@@ -2,6 +2,7 @@ import logging
 
 from llama_index.core.llms import ChatMessage
 from llama_index.core.program.function_program import get_function_tool
+from llama_index.llms.google_genai import GoogleGenAI
 from llama_index.llms.ollama import Ollama
 from llama_index.llms.openai import OpenAI
 
@@ -20,7 +21,7 @@ class AIClient:
         self.settings = AIConfig()
         self.llm = self.get_llm()
 
-    def get_llm(self) -> Ollama | OpenAI:
+    def get_llm(self) -> Ollama | OpenAI | GoogleGenAI:
         if self.settings.llm_backend == "ollama":
             return Ollama(
                 model=self.settings.llm_model or "llama3.1",
@@ -31,6 +32,11 @@ class AIClient:
             return OpenAI(
                 model=self.settings.llm_model or "gpt-3.5-turbo",
                 api_base=self.settings.llm_endpoint or None,
+                api_key=self.settings.llm_api_key,
+            )
+        elif self.settings.llm_backend == "gemini":
+            return GoogleGenAI(
+                model=self.settings.llm_model or "models/gemini-3-flash-preview",
                 api_key=self.settings.llm_api_key,
             )
         else:

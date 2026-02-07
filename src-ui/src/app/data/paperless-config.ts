@@ -52,15 +52,24 @@ export const ConfigCategory = {
   OCR: $localize`OCR Settings`,
   Barcode: $localize`Barcode Settings`,
   AI: $localize`AI Settings`,
+  LLMOCR: $localize`LLM OCR Settings`,
 }
 
 export const LLMEmbeddingBackendConfig = {
   OPENAI: 'openai',
   HUGGINGFACE: 'huggingface',
+  GEMINI: 'gemini',
 }
 
 export const LLMBackendConfig = {
   OPENAI: 'openai',
+  OLLAMA: 'ollama',
+  GEMINI: 'gemini',
+}
+
+export const LLMOcrBackendConfig = {
+  OPENAI: 'openai',
+  GEMINI: 'gemini',
   OLLAMA: 'ollama',
 }
 
@@ -330,6 +339,43 @@ export const PaperlessConfigOptions: ConfigOption[] = [
     config_key: 'PAPERLESS_AI_LLM_ENDPOINT',
     category: ConfigCategory.AI,
   },
+  {
+    key: 'llm_ocr_enabled',
+    title: $localize`LLM OCR Enabled`,
+    type: ConfigOptionType.Boolean,
+    config_key: 'PAPERLESS_LLM_OCR_ENABLED',
+    category: ConfigCategory.LLMOCR,
+    note: $localize`Uses vision-capable LLMs to extract text from documents. Consider privacy implications when using remote models.`,
+  },
+  {
+    key: 'llm_ocr_backend',
+    title: $localize`LLM OCR Backend`,
+    type: ConfigOptionType.Select,
+    choices: mapToItems(LLMOcrBackendConfig),
+    config_key: 'PAPERLESS_LLM_OCR_BACKEND',
+    category: ConfigCategory.LLMOCR,
+  },
+  {
+    key: 'llm_ocr_model',
+    title: $localize`LLM OCR Model`,
+    type: ConfigOptionType.String,
+    config_key: 'PAPERLESS_LLM_OCR_MODEL',
+    category: ConfigCategory.LLMOCR,
+  },
+  {
+    key: 'llm_ocr_api_key',
+    title: $localize`LLM OCR API Key`,
+    type: ConfigOptionType.Password,
+    config_key: 'PAPERLESS_LLM_OCR_API_KEY',
+    category: ConfigCategory.LLMOCR,
+  },
+  {
+    key: 'llm_ocr_endpoint',
+    title: $localize`LLM OCR Endpoint`,
+    type: ConfigOptionType.String,
+    config_key: 'PAPERLESS_LLM_OCR_ENDPOINT',
+    category: ConfigCategory.LLMOCR,
+  },
 ]
 
 export interface PaperlessConfig extends ObjectWithId {
@@ -367,4 +413,9 @@ export interface PaperlessConfig extends ObjectWithId {
   llm_model: string
   llm_api_key: string
   llm_endpoint: string
+  llm_ocr_enabled: boolean
+  llm_ocr_backend: string
+  llm_ocr_model: string
+  llm_ocr_api_key: string
+  llm_ocr_endpoint: string
 }
