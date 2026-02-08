@@ -8,7 +8,10 @@ from django.test import override_settings
 from documents.tests.utils import DirectoriesMixin
 from documents.tests.utils import FileSystemAssertsMixin
 from paperless_llm.parsers import VALID_TEXT_LENGTH
+from paperless_llm.parsers import HocrLine
+from paperless_llm.parsers import HocrWord
 from paperless_llm.parsers import LlmDocumentParser
+from paperless_llm.parsers import PageOcrData
 from paperless_llm.parsers import _post_process_text
 from paperless_llm.signals import get_parser
 
@@ -173,12 +176,23 @@ class TestLlmParserParse(DirectoriesMixin, FileSystemAssertsMixin, TestCase):
 
     @override_settings(**OPENAI_SETTINGS, OCR_SKIP_ARCHIVE_FILE="never")
     @mock.patch("paperless_llm.parsers.LlmDocumentParser._create_archive_pdf")
+    @mock.patch(
+        "paperless_llm.parsers.LlmDocumentParser._generate_aligned_hocr",
+        return_value=None,
+    )
     @mock.patch("paperless_llm.parsers.LlmDocumentParser._ocr_image")
     @mock.patch("pdf2image.convert_from_path")
     @mock.patch(
         "paperless_llm.parsers.LlmDocumentParser._extract_text_pdftotext",
     )
-    def test_parse_pdf(self, mock_extract, mock_convert, mock_ocr, mock_archive):
+    def test_parse_pdf(
+        self,
+        mock_extract,
+        mock_convert,
+        mock_ocr,
+        mock_aligned,
+        mock_archive,
+    ):
         mock_extract.return_value = None
         mock_page1, mock_page2 = mock.Mock(), mock.Mock()
         mock_convert.return_value = [mock_page1, mock_page2]
@@ -196,8 +210,12 @@ class TestLlmParserParse(DirectoriesMixin, FileSystemAssertsMixin, TestCase):
 
     @override_settings(**OPENAI_SETTINGS, OCR_SKIP_ARCHIVE_FILE="never")
     @mock.patch("paperless_llm.parsers.LlmDocumentParser._create_archive_pdf")
+    @mock.patch(
+        "paperless_llm.parsers.LlmDocumentParser._generate_aligned_hocr",
+        return_value=None,
+    )
     @mock.patch("paperless_llm.parsers.LlmDocumentParser._ocr_image")
-    def test_parse_image_png(self, mock_ocr, mock_archive):
+    def test_parse_image_png(self, mock_ocr, mock_aligned, mock_archive):
         mock_ocr.return_value = "Extracted text"
         mock_archive.return_value = Path("/tmp/archive.pdf")
 
@@ -210,8 +228,12 @@ class TestLlmParserParse(DirectoriesMixin, FileSystemAssertsMixin, TestCase):
 
     @override_settings(**OPENAI_SETTINGS, OCR_SKIP_ARCHIVE_FILE="never")
     @mock.patch("paperless_llm.parsers.LlmDocumentParser._create_archive_pdf")
+    @mock.patch(
+        "paperless_llm.parsers.LlmDocumentParser._generate_aligned_hocr",
+        return_value=None,
+    )
     @mock.patch("paperless_llm.parsers.LlmDocumentParser._ocr_image")
-    def test_parse_image_jpeg(self, mock_ocr, mock_archive):
+    def test_parse_image_jpeg(self, mock_ocr, mock_aligned, mock_archive):
         mock_ocr.return_value = "JPEG text"
         mock_archive.return_value = Path("/tmp/archive.pdf")
 
@@ -224,8 +246,12 @@ class TestLlmParserParse(DirectoriesMixin, FileSystemAssertsMixin, TestCase):
 
     @override_settings(**OPENAI_SETTINGS, OCR_SKIP_ARCHIVE_FILE="never")
     @mock.patch("paperless_llm.parsers.LlmDocumentParser._create_archive_pdf")
+    @mock.patch(
+        "paperless_llm.parsers.LlmDocumentParser._generate_aligned_hocr",
+        return_value=None,
+    )
     @mock.patch("paperless_llm.parsers.LlmDocumentParser._ocr_image")
-    def test_parse_tiff_converts_to_png(self, mock_ocr, mock_archive):
+    def test_parse_tiff_converts_to_png(self, mock_ocr, mock_aligned, mock_archive):
         mock_ocr.return_value = "Text from tiff"
         mock_archive.return_value = Path("/tmp/archive.pdf")
 
@@ -239,8 +265,17 @@ class TestLlmParserParse(DirectoriesMixin, FileSystemAssertsMixin, TestCase):
 
     @override_settings(**OPENAI_SETTINGS, OCR_SKIP_ARCHIVE_FILE="never")
     @mock.patch("paperless_llm.parsers.LlmDocumentParser._create_archive_pdf")
+    @mock.patch(
+        "paperless_llm.parsers.LlmDocumentParser._generate_aligned_hocr",
+        return_value=None,
+    )
     @mock.patch("paperless_llm.parsers.LlmDocumentParser._ocr_image")
-    def test_parse_native_image_no_conversion(self, mock_ocr, mock_archive):
+    def test_parse_native_image_no_conversion(
+        self,
+        mock_ocr,
+        mock_aligned,
+        mock_archive,
+    ):
         mock_ocr.return_value = "Text from png"
         mock_archive.return_value = Path("/tmp/archive.pdf")
 
@@ -325,6 +360,10 @@ class TestLlmParserParse(DirectoriesMixin, FileSystemAssertsMixin, TestCase):
             mock.patch(
                 "paperless_llm.parsers.LlmDocumentParser._create_archive_pdf",
             ) as mock_archive,
+            mock.patch(
+                "paperless_llm.parsers.LlmDocumentParser._generate_aligned_hocr",
+                return_value=None,
+            ),
             mock.patch("pdf2image.convert_from_path") as mock_convert,
             mock.patch(
                 "paperless_llm.parsers.LlmDocumentParser._ocr_image",
@@ -342,8 +381,12 @@ class TestLlmParserParse(DirectoriesMixin, FileSystemAssertsMixin, TestCase):
             mock_ocr.assert_called_once()
 
     @override_settings(**OPENAI_SETTINGS, OCR_SKIP_ARCHIVE_FILE="always")
+    @mock.patch(
+        "paperless_llm.parsers.LlmDocumentParser._generate_aligned_hocr",
+        return_value=None,
+    )
     @mock.patch("paperless_llm.parsers.LlmDocumentParser._ocr_image")
-    def test_parse_image_skip_archive_always(self, mock_ocr):
+    def test_parse_image_skip_archive_always(self, mock_ocr, mock_aligned):
         mock_ocr.return_value = "Image text"
 
         parser = get_parser(uuid.uuid4())
@@ -355,18 +398,30 @@ class TestLlmParserParse(DirectoriesMixin, FileSystemAssertsMixin, TestCase):
     # --- _parse_pdf_pages ---
 
     @override_settings(**OPENAI_SETTINGS)
+    @mock.patch(
+        "paperless_llm.parsers.LlmDocumentParser._generate_aligned_hocr",
+        return_value=None,
+    )
     @mock.patch("paperless_llm.parsers.LlmDocumentParser._ocr_image")
     @mock.patch("pdf2image.convert_from_path")
-    def test_parse_pdf_pages_calls_progress(self, mock_convert, mock_ocr):
+    def test_parse_pdf_pages_calls_progress(
+        self,
+        mock_convert,
+        mock_ocr,
+        mock_aligned,
+    ):
         mock_pages = [mock.Mock(), mock.Mock(), mock.Mock()]
         mock_convert.return_value = mock_pages
         mock_ocr.side_effect = ["Text 1", "Text 2", "Text 3"]
 
         parser = LlmDocumentParser(uuid.uuid4())
         with mock.patch.object(parser, "progress") as mock_progress:
-            texts = parser._parse_pdf_pages(SAMPLE_DIR / "simple.pdf")
+            results = parser._parse_pdf_pages(SAMPLE_DIR / "simple.pdf")
 
-        self.assertEqual(texts, ["Text 1", "Text 2", "Text 3"])
+        self.assertEqual(len(results), 3)
+        self.assertEqual([r.text for r in results], ["Text 1", "Text 2", "Text 3"])
+        for r in results:
+            self.assertIsNone(r.hocr)
         self.assertEqual(mock_progress.call_count, 3)
         mock_progress.assert_any_call(1, 3)
         mock_progress.assert_any_call(2, 3)
@@ -376,18 +431,21 @@ class TestLlmParserParse(DirectoriesMixin, FileSystemAssertsMixin, TestCase):
 
     @override_settings(**OPENAI_SETTINGS, OCR_OUTPUT_TYPE="pdfa")
     @mock.patch("ocrmypdf.ocr")
-    @mock.patch("paperless_llm.ocrmypdf_engine.page_text_store")
+    @mock.patch("paperless_llm.ocrmypdf_engine.page_data_store")
     def test_create_archive_pdf_for_pdf(self, mock_store, mock_ocr):
         parser = LlmDocumentParser(uuid.uuid4())
-        page_texts = ["Page 1", "Page 2"]
+        page_data_list = [
+            PageOcrData(text="Page 1"),
+            PageOcrData(text="Page 2"),
+        ]
 
         parser._create_archive_pdf(
             SAMPLE_DIR / "simple.pdf",
             "application/pdf",
-            page_texts,
+            page_data_list,
         )
 
-        mock_store.set_texts.assert_called_once_with(page_texts)
+        mock_store.set_pages.assert_called_once_with(page_data_list)
         mock_ocr.assert_called_once()
         call_kwargs = mock_ocr.call_args[1]
         self.assertEqual(call_kwargs["output_type"], "pdfa")
@@ -397,14 +455,14 @@ class TestLlmParserParse(DirectoriesMixin, FileSystemAssertsMixin, TestCase):
 
     @override_settings(**OPENAI_SETTINGS, OCR_OUTPUT_TYPE="pdfa")
     @mock.patch("ocrmypdf.ocr")
-    @mock.patch("paperless_llm.ocrmypdf_engine.page_text_store")
+    @mock.patch("paperless_llm.ocrmypdf_engine.page_data_store")
     def test_create_archive_pdf_for_image_includes_dpi(self, mock_store, mock_ocr):
         parser = LlmDocumentParser(uuid.uuid4())
 
         parser._create_archive_pdf(
             SAMPLE_DIR / "simple.png",
             "image/png",
-            ["text"],
+            [PageOcrData(text="text")],
         )
 
         call_kwargs = mock_ocr.call_args[1]
@@ -612,3 +670,578 @@ class TestLlmSignals(DirectoriesMixin, FileSystemAssertsMixin, TestCase):
         result = llm_consumer_declaration(None)
         parser = LlmDocumentParser(uuid.uuid4())
         self.assertEqual(result["mime_types"], parser.supported_mime_types())
+
+
+class TestTesseractHocr(DirectoriesMixin, FileSystemAssertsMixin, TestCase):
+    @override_settings(**OPENAI_SETTINGS, OCR_LANGUAGE="eng")
+    @mock.patch("paperless_llm.parsers.run_subprocess")
+    def test_run_tesseract_hocr_success(self, mock_run):
+        parser = LlmDocumentParser(uuid.uuid4())
+        hocr_content = '<html><body><div class="ocr_page">test</div></body></html>'
+
+        def write_hocr(cmd, **kwargs):
+            # Tesseract writes <prefix>.hocr
+            output_prefix = cmd[2]
+            Path(f"{output_prefix}.hocr").write_text(
+                hocr_content,
+                encoding="utf-8",
+            )
+
+        mock_run.side_effect = write_hocr
+        result = parser._run_tesseract_hocr(SAMPLE_DIR / "simple.png")
+
+        self.assertEqual(result, hocr_content)
+        mock_run.assert_called_once()
+        cmd = mock_run.call_args[0][0]
+        self.assertEqual(cmd[0], "tesseract")
+        self.assertIn("-l", cmd)
+        self.assertIn("eng", cmd)
+        self.assertIn("hocr", cmd)
+
+    @override_settings(**OPENAI_SETTINGS, OCR_LANGUAGE="eng")
+    @mock.patch(
+        "paperless_llm.parsers.run_subprocess",
+        side_effect=FileNotFoundError("tesseract not found"),
+    )
+    def test_run_tesseract_hocr_not_installed(self, mock_run):
+        parser = LlmDocumentParser(uuid.uuid4())
+        result = parser._run_tesseract_hocr(SAMPLE_DIR / "simple.png")
+        self.assertIsNone(result)
+
+    @override_settings(**OPENAI_SETTINGS, OCR_LANGUAGE="eng")
+    @mock.patch(
+        "paperless_llm.parsers.run_subprocess",
+        side_effect=Exception("tesseract crashed"),
+    )
+    def test_run_tesseract_hocr_error(self, mock_run):
+        parser = LlmDocumentParser(uuid.uuid4())
+        result = parser._run_tesseract_hocr(SAMPLE_DIR / "simple.png")
+        self.assertIsNone(result)
+
+
+class TestParseHocrLines(DirectoriesMixin, FileSystemAssertsMixin, TestCase):
+    SAMPLE_HOCR = (
+        '<?xml version="1.0" encoding="UTF-8"?>\n'
+        '<html xmlns="http://www.w3.org/1999/xhtml">\n'
+        "<body>\n"
+        '<div class="ocr_page" title="bbox 0 0 2550 3300; ppageno 0">\n'
+        '<div class="ocr_carea" title="bbox 100 100 2450 3200">\n'
+        '<p class="ocr_par" title="bbox 100 100 2450 3200">\n'
+        '<span class="ocr_line" title="bbox 100 100 2000 150">\n'
+        '<span class="ocrx_word" title="bbox 100 100 300 150">Hello</span>\n'
+        '<span class="ocrx_word" title="bbox 350 100 600 150">World</span>\n'
+        "</span>\n"
+        '<span class="ocr_line" title="bbox 100 200 2000 250">\n'
+        '<span class="ocrx_word" title="bbox 100 200 400 250">Second</span>\n'
+        '<span class="ocrx_word" title="bbox 450 200 600 250">line</span>\n'
+        "</span>\n"
+        "</p>\n</div>\n</div>\n"
+        "</body>\n</html>"
+    )
+
+    @override_settings(**OPENAI_SETTINGS)
+    def test_parse_hocr_lines(self):
+        parser = LlmDocumentParser(uuid.uuid4())
+        page_w, page_h, lines = parser._parse_hocr_lines(self.SAMPLE_HOCR)
+
+        self.assertEqual(page_w, 2550)
+        self.assertEqual(page_h, 3300)
+        self.assertEqual(len(lines), 2)
+
+        self.assertEqual(lines[0].index, 0)
+        self.assertEqual(lines[0].bbox, (100, 100, 2000, 150))
+        self.assertEqual(lines[0].text, "Hello World")
+        self.assertEqual(len(lines[0].words), 2)
+        self.assertEqual(lines[0].words[0].text, "Hello")
+        self.assertEqual(lines[0].words[0].bbox, (100, 100, 300, 150))
+
+        self.assertEqual(lines[1].index, 1)
+        self.assertEqual(lines[1].bbox, (100, 200, 2000, 250))
+        self.assertEqual(lines[1].text, "Second line")
+
+    @override_settings(**OPENAI_SETTINGS)
+    def test_parse_hocr_lines_empty(self):
+        empty_hocr = (
+            '<?xml version="1.0" encoding="UTF-8"?>\n'
+            '<html xmlns="http://www.w3.org/1999/xhtml">\n'
+            "<body>\n"
+            '<div class="ocr_page" title="bbox 0 0 200 100">\n'
+            "</div>\n"
+            "</body>\n</html>"
+        )
+        parser = LlmDocumentParser(uuid.uuid4())
+        page_w, page_h, lines = parser._parse_hocr_lines(empty_hocr)
+        self.assertEqual(page_w, 200)
+        self.assertEqual(page_h, 100)
+        self.assertEqual(lines, [])
+
+
+class TestAlignWithLlm(DirectoriesMixin, FileSystemAssertsMixin, TestCase):
+    @override_settings(**OPENAI_SETTINGS)
+    @mock.patch("paperless_llm.parsers.LlmDocumentParser.get_multi_modal_llm")
+    def test_align_with_llm_success(self, mock_get_llm):
+        mock_llm = mock.Mock()
+        mock_response = mock.Mock()
+        mock_response.message.content = (
+            '{"lines": {"0": "Hello World", "1": "Second line"}, "extra": []}'
+        )
+        mock_llm.chat.return_value = mock_response
+        mock_get_llm.return_value = mock_llm
+
+        parser = LlmDocumentParser(uuid.uuid4())
+        lines = [
+            HocrLine(
+                index=0,
+                bbox=(100, 100, 2000, 150),
+                text="He1lo Wor1d",
+                words=[
+                    HocrWord(bbox=(100, 100, 300, 150), text="He1lo"),
+                    HocrWord(bbox=(350, 100, 600, 150), text="Wor1d"),
+                ],
+            ),
+            HocrLine(
+                index=1,
+                bbox=(100, 200, 2000, 250),
+                text="Sec0nd l1ne",
+                words=[
+                    HocrWord(bbox=(100, 200, 400, 250), text="Sec0nd"),
+                    HocrWord(bbox=(450, 200, 600, 250), text="l1ne"),
+                ],
+            ),
+        ]
+        corrections, extra = parser._align_with_llm(
+            SAMPLE_DIR / "simple.png",
+            "image/png",
+            lines,
+            "Hello World\nSecond line",
+        )
+
+        self.assertEqual(corrections, {0: "Hello World", 1: "Second line"})
+        self.assertEqual(extra, [])
+        mock_llm.chat.assert_called_once()
+
+    @override_settings(**OPENAI_SETTINGS)
+    @mock.patch("paperless_llm.parsers.LlmDocumentParser.get_multi_modal_llm")
+    def test_align_with_llm_with_extra(self, mock_get_llm):
+        mock_llm = mock.Mock()
+        mock_response = mock.Mock()
+        mock_response.message.content = (
+            '{"lines": {"0": "Hello"}, "extra": ["Footer text"]}'
+        )
+        mock_llm.chat.return_value = mock_response
+        mock_get_llm.return_value = mock_llm
+
+        parser = LlmDocumentParser(uuid.uuid4())
+        lines = [
+            HocrLine(
+                index=0,
+                bbox=(100, 100, 500, 150),
+                text="He1lo",
+                words=[HocrWord(bbox=(100, 100, 500, 150), text="He1lo")],
+            ),
+        ]
+        corrections, extra = parser._align_with_llm(
+            SAMPLE_DIR / "simple.png",
+            "image/png",
+            lines,
+            "Hello\nFooter text",
+        )
+        self.assertEqual(corrections, {0: "Hello"})
+        self.assertEqual(extra, ["Footer text"])
+
+    @override_settings(**OPENAI_SETTINGS)
+    @mock.patch("paperless_llm.parsers.LlmDocumentParser.get_multi_modal_llm")
+    def test_align_with_llm_bad_json_fallback(self, mock_get_llm):
+        mock_llm = mock.Mock()
+        mock_response = mock.Mock()
+        mock_response.message.content = "This is not valid JSON at all!"
+        mock_llm.chat.return_value = mock_response
+        mock_get_llm.return_value = mock_llm
+
+        parser = LlmDocumentParser(uuid.uuid4())
+        lines = [
+            HocrLine(
+                index=0,
+                bbox=(100, 100, 500, 150),
+                text="Hello",
+                words=[HocrWord(bbox=(100, 100, 500, 150), text="Hello")],
+            ),
+        ]
+        corrections, extra = parser._align_with_llm(
+            SAMPLE_DIR / "simple.png",
+            "image/png",
+            lines,
+            "Hello",
+        )
+        self.assertEqual(corrections, {})
+        self.assertEqual(extra, [])
+
+    @override_settings(**OPENAI_SETTINGS)
+    @mock.patch("paperless_llm.parsers.LlmDocumentParser.get_multi_modal_llm")
+    def test_align_with_llm_strips_markdown_fences(self, mock_get_llm):
+        mock_llm = mock.Mock()
+        mock_response = mock.Mock()
+        mock_response.message.content = (
+            '```json\n{"lines": {"0": "Hello"}, "extra": []}\n```'
+        )
+        mock_llm.chat.return_value = mock_response
+        mock_get_llm.return_value = mock_llm
+
+        parser = LlmDocumentParser(uuid.uuid4())
+        lines = [
+            HocrLine(
+                index=0,
+                bbox=(100, 100, 500, 150),
+                text="He1lo",
+                words=[HocrWord(bbox=(100, 100, 500, 150), text="He1lo")],
+            ),
+        ]
+        corrections, _ = parser._align_with_llm(
+            SAMPLE_DIR / "simple.png",
+            "image/png",
+            lines,
+            "Hello",
+        )
+        self.assertEqual(corrections, {0: "Hello"})
+
+
+class TestRebuildHocr(DirectoriesMixin, FileSystemAssertsMixin, TestCase):
+    @override_settings(**OPENAI_SETTINGS)
+    def test_rebuild_hocr_preserves_bboxes_replaces_text(self):
+        parser = LlmDocumentParser(uuid.uuid4())
+        lines = [
+            HocrLine(
+                index=0,
+                bbox=(100, 100, 2000, 150),
+                text="He1lo Wor1d",
+                words=[
+                    HocrWord(bbox=(100, 100, 300, 150), text="He1lo"),
+                    HocrWord(bbox=(350, 100, 600, 150), text="Wor1d"),
+                ],
+            ),
+            HocrLine(
+                index=1,
+                bbox=(100, 200, 2000, 250),
+                text="Sec0nd l1ne",
+                words=[
+                    HocrWord(bbox=(100, 200, 400, 250), text="Sec0nd"),
+                    HocrWord(bbox=(450, 200, 600, 250), text="l1ne"),
+                ],
+            ),
+        ]
+        corrections = {0: "Hello World", 1: "Second line"}
+        result = parser._rebuild_hocr(2550, 3300, lines, corrections, [])
+
+        # Verify it's valid XML
+        import xml.etree.ElementTree as ET
+
+        ET.fromstring(result)
+
+        # Verify corrected text is present
+        self.assertIn("Hello", result)
+        self.assertIn("World", result)
+        self.assertIn("Second", result)
+        self.assertIn("line", result)
+
+        # Verify original bboxes are preserved for lines
+        self.assertIn("bbox 100 100 2000 150", result)
+        self.assertIn("bbox 100 200 2000 250", result)
+
+        # Verify OCR system tag
+        self.assertIn("paperless-llm-aligned", result)
+
+        # Verify old text not present
+        self.assertNotIn("He1lo", result)
+        self.assertNotIn("Wor1d", result)
+
+    @override_settings(**OPENAI_SETTINGS)
+    def test_rebuild_hocr_with_extra_lines(self):
+        parser = LlmDocumentParser(uuid.uuid4())
+        lines = [
+            HocrLine(
+                index=0,
+                bbox=(100, 100, 500, 150),
+                text="Hello",
+                words=[HocrWord(bbox=(100, 100, 500, 150), text="Hello")],
+            ),
+        ]
+        corrections = {0: "Hello"}
+        extra = ["Footer text"]
+        result = parser._rebuild_hocr(2550, 3300, lines, corrections, extra)
+
+        self.assertIn("Footer", result)
+        self.assertIn("text", result)
+        self.assertIn("Hello", result)
+
+    @override_settings(**OPENAI_SETTINGS)
+    def test_rebuild_hocr_uncorrected_line_keeps_original(self):
+        parser = LlmDocumentParser(uuid.uuid4())
+        lines = [
+            HocrLine(
+                index=0,
+                bbox=(100, 100, 500, 150),
+                text="Original text",
+                words=[
+                    HocrWord(bbox=(100, 100, 300, 150), text="Original"),
+                    HocrWord(bbox=(350, 100, 500, 150), text="text"),
+                ],
+            ),
+        ]
+        # No correction for line 0
+        result = parser._rebuild_hocr(2550, 3300, lines, {}, [])
+        self.assertIn("Original", result)
+        self.assertIn("text", result)
+
+
+class TestGenerateAlignedHocr(DirectoriesMixin, FileSystemAssertsMixin, TestCase):
+    @override_settings(**OPENAI_SETTINGS, OCR_LANGUAGE="eng")
+    @mock.patch("paperless_llm.parsers.LlmDocumentParser._align_with_llm")
+    @mock.patch("paperless_llm.parsers.LlmDocumentParser._run_tesseract_hocr")
+    def test_generate_aligned_hocr_full_pipeline(self, mock_tess, mock_align):
+        sample_hocr = (
+            '<?xml version="1.0" encoding="UTF-8"?>\n'
+            '<html xmlns="http://www.w3.org/1999/xhtml">\n'
+            "<body>\n"
+            '<div class="ocr_page" title="bbox 0 0 2550 3300">\n'
+            '<span class="ocr_line" title="bbox 100 100 2000 150">\n'
+            '<span class="ocrx_word" title="bbox 100 100 300 150">He1lo</span>\n'
+            '<span class="ocrx_word" title="bbox 350 100 600 150">Wor1d</span>\n'
+            "</span>\n"
+            "</div>\n</body>\n</html>"
+        )
+        mock_tess.return_value = sample_hocr
+        mock_align.return_value = ({0: "Hello World"}, [])
+
+        parser = LlmDocumentParser(uuid.uuid4())
+        result = parser._generate_aligned_hocr(
+            SAMPLE_DIR / "simple.png",
+            "image/png",
+            "Hello World",
+        )
+
+        self.assertIsNotNone(result)
+        self.assertIn("Hello", result)
+        self.assertIn("World", result)
+        self.assertIn("paperless-llm-aligned", result)
+
+    @override_settings(**OPENAI_SETTINGS, OCR_LANGUAGE="eng")
+    @mock.patch(
+        "paperless_llm.parsers.LlmDocumentParser._run_tesseract_hocr",
+        return_value=None,
+    )
+    def test_generate_aligned_hocr_tesseract_fails(self, mock_tess):
+        parser = LlmDocumentParser(uuid.uuid4())
+        result = parser._generate_aligned_hocr(
+            SAMPLE_DIR / "simple.png",
+            "image/png",
+            "Hello World",
+        )
+        self.assertIsNone(result)
+
+    @override_settings(**OPENAI_SETTINGS, OCR_LANGUAGE="eng")
+    @mock.patch("paperless_llm.parsers.LlmDocumentParser._align_with_llm")
+    @mock.patch("paperless_llm.parsers.LlmDocumentParser._run_tesseract_hocr")
+    def test_generate_aligned_hocr_alignment_fails(self, mock_tess, mock_align):
+        sample_hocr = (
+            '<?xml version="1.0" encoding="UTF-8"?>\n'
+            '<html xmlns="http://www.w3.org/1999/xhtml">\n'
+            "<body>\n"
+            '<div class="ocr_page" title="bbox 0 0 2550 3300">\n'
+            '<span class="ocr_line" title="bbox 100 100 2000 150">\n'
+            '<span class="ocrx_word" title="bbox 100 100 300 150">Hello</span>\n'
+            "</span>\n"
+            "</div>\n</body>\n</html>"
+        )
+        mock_tess.return_value = sample_hocr
+        mock_align.return_value = ({}, [])  # Empty corrections = failure
+
+        parser = LlmDocumentParser(uuid.uuid4())
+        result = parser._generate_aligned_hocr(
+            SAMPLE_DIR / "simple.png",
+            "image/png",
+            "Hello",
+        )
+        self.assertIsNone(result)
+
+
+class TestParsePdfPagesReturnsPageOcrData(
+    DirectoriesMixin,
+    FileSystemAssertsMixin,
+    TestCase,
+):
+    @override_settings(**OPENAI_SETTINGS)
+    @mock.patch(
+        "paperless_llm.parsers.LlmDocumentParser._generate_aligned_hocr",
+    )
+    @mock.patch("paperless_llm.parsers.LlmDocumentParser._ocr_image")
+    @mock.patch("pdf2image.convert_from_path")
+    def test_parse_pdf_pages_returns_page_ocr_data(
+        self,
+        mock_convert,
+        mock_ocr,
+        mock_aligned,
+    ):
+        mock_pages = [mock.Mock(), mock.Mock()]
+        mock_convert.return_value = mock_pages
+        mock_ocr.side_effect = ["Text 1", "Text 2"]
+        mock_aligned.side_effect = ["<hocr>aligned1</hocr>", None]
+
+        parser = LlmDocumentParser(uuid.uuid4())
+        with mock.patch.object(parser, "progress"):
+            results = parser._parse_pdf_pages(SAMPLE_DIR / "simple.pdf")
+
+        self.assertEqual(len(results), 2)
+        self.assertIsInstance(results[0], PageOcrData)
+        self.assertEqual(results[0].text, "Text 1")
+        self.assertEqual(results[0].hocr, "<hocr>aligned1</hocr>")
+        self.assertEqual(results[1].text, "Text 2")
+        self.assertIsNone(results[1].hocr)
+
+    @override_settings(**OPENAI_SETTINGS, OCR_SKIP_ARCHIVE_FILE="never")
+    @mock.patch("paperless_llm.parsers.LlmDocumentParser._create_archive_pdf")
+    @mock.patch(
+        "paperless_llm.parsers.LlmDocumentParser._generate_aligned_hocr",
+    )
+    @mock.patch("paperless_llm.parsers.LlmDocumentParser._ocr_image")
+    @mock.patch("pdf2image.convert_from_path")
+    @mock.patch(
+        "paperless_llm.parsers.LlmDocumentParser._extract_text_pdftotext",
+    )
+    def test_archive_uses_aligned_hocr(
+        self,
+        mock_extract,
+        mock_convert,
+        mock_ocr,
+        mock_aligned,
+        mock_archive,
+    ):
+        mock_extract.return_value = None
+        mock_page = mock.Mock()
+        mock_convert.return_value = [mock_page]
+        mock_ocr.return_value = "Page text"
+        mock_aligned.return_value = "<hocr>aligned</hocr>"
+        mock_archive.return_value = Path("/tmp/archive.pdf")
+
+        parser = get_parser(uuid.uuid4())
+        parser.parse(SAMPLE_DIR / "simple.pdf", "application/pdf")
+
+        self.assertEqual(parser.text, "Page text")
+        mock_archive.assert_called_once()
+        page_data_list = mock_archive.call_args[0][2]
+        self.assertEqual(len(page_data_list), 1)
+        self.assertIsInstance(page_data_list[0], PageOcrData)
+        self.assertEqual(page_data_list[0].text, "Page text")
+        self.assertEqual(page_data_list[0].hocr, "<hocr>aligned</hocr>")
+
+
+class TestMultiPageImage(DirectoriesMixin, FileSystemAssertsMixin, TestCase):
+    @override_settings(**OPENAI_SETTINGS, OCR_SKIP_ARCHIVE_FILE="never")
+    @mock.patch("paperless_llm.parsers.LlmDocumentParser._create_archive_pdf")
+    @mock.patch(
+        "paperless_llm.parsers.LlmDocumentParser._generate_aligned_hocr",
+        return_value=None,
+    )
+    @mock.patch("paperless_llm.parsers.LlmDocumentParser._ocr_image")
+    @mock.patch(
+        "paperless_llm.parsers.LlmDocumentParser._extract_image_pages",
+    )
+    @mock.patch(
+        "paperless_llm.parsers.LlmDocumentParser._get_image_page_count",
+        return_value=3,
+    )
+    def test_parse_multi_page_tiff(
+        self,
+        mock_page_count,
+        mock_extract_pages,
+        mock_ocr,
+        mock_aligned,
+        mock_archive,
+    ):
+        mock_extract_pages.return_value = [
+            Path("/tmp/frame_0.png"),
+            Path("/tmp/frame_1.png"),
+            Path("/tmp/frame_2.png"),
+        ]
+        mock_ocr.side_effect = ["Page 1 text", "Page 2 text", "Page 3 text"]
+        mock_archive.return_value = Path("/tmp/archive.pdf")
+
+        parser = get_parser(uuid.uuid4())
+        parser.parse(SAMPLE_DIR / "simple.tiff", "image/tiff")
+
+        self.assertEqual(
+            parser.text,
+            "Page 1 text\n\nPage 2 text\n\nPage 3 text",
+        )
+        self.assertEqual(mock_ocr.call_count, 3)
+        mock_archive.assert_called_once()
+        page_data_list = mock_archive.call_args[0][2]
+        self.assertEqual(len(page_data_list), 3)
+
+    @override_settings(**OPENAI_SETTINGS, OCR_SKIP_ARCHIVE_FILE="never")
+    @mock.patch("paperless_llm.parsers.LlmDocumentParser._create_archive_pdf")
+    @mock.patch(
+        "paperless_llm.parsers.LlmDocumentParser._generate_aligned_hocr",
+        return_value=None,
+    )
+    @mock.patch("paperless_llm.parsers.LlmDocumentParser._ocr_image")
+    @mock.patch(
+        "paperless_llm.parsers.LlmDocumentParser._get_image_page_count",
+        return_value=1,
+    )
+    def test_parse_single_page_image_unchanged(
+        self,
+        mock_page_count,
+        mock_ocr,
+        mock_aligned,
+        mock_archive,
+    ):
+        mock_ocr.return_value = "Single page text"
+        mock_archive.return_value = Path("/tmp/archive.pdf")
+
+        parser = get_parser(uuid.uuid4())
+        parser.parse(SAMPLE_DIR / "simple.png", "image/png")
+
+        self.assertEqual(parser.text, "Single page text")
+        mock_ocr.assert_called_once()
+
+
+class TestTextPreservationOnArchiveFailure(
+    DirectoriesMixin,
+    FileSystemAssertsMixin,
+    TestCase,
+):
+    @override_settings(**OPENAI_SETTINGS, OCR_SKIP_ARCHIVE_FILE="never")
+    @mock.patch(
+        "paperless_llm.parsers.LlmDocumentParser._create_archive_pdf",
+        side_effect=RuntimeError("ocrmypdf failed"),
+    )
+    @mock.patch(
+        "paperless_llm.parsers.LlmDocumentParser._generate_aligned_hocr",
+        return_value=None,
+    )
+    @mock.patch("paperless_llm.parsers.LlmDocumentParser._ocr_image")
+    @mock.patch("pdf2image.convert_from_path")
+    @mock.patch(
+        "paperless_llm.parsers.LlmDocumentParser._extract_text_pdftotext",
+    )
+    def test_text_preserved_when_archive_creation_fails(
+        self,
+        mock_extract,
+        mock_convert,
+        mock_ocr,
+        mock_aligned,
+        mock_archive,
+    ):
+        """Text should be preserved even if archive PDF creation fails."""
+        mock_extract.return_value = None
+        mock_page = mock.Mock()
+        mock_convert.return_value = [mock_page]
+        mock_ocr.return_value = "Extracted text that should survive"
+
+        parser = get_parser(uuid.uuid4())
+        parser.parse(SAMPLE_DIR / "simple.pdf", "application/pdf")
+
+        # Text must be preserved despite archive failure
+        self.assertEqual(parser.text, "Extracted text that should survive")
+        # Archive path should NOT be set
+        self.assertIsNone(parser.archive_path)

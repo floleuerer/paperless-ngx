@@ -1,7 +1,10 @@
+import dataclasses
+import json
 import logging
 import re
 import shutil
 import tempfile
+import xml.etree.ElementTree as ET
 from pathlib import Path
 
 from django.conf import settings
@@ -16,6 +19,26 @@ from paperless.models import ArchiveFileChoices
 logger = logging.getLogger("paperless.parsing.llm")
 
 VALID_TEXT_LENGTH = 50
+
+
+@dataclasses.dataclass
+class HocrWord:
+    bbox: tuple[int, int, int, int]  # left, top, right, bottom
+    text: str
+
+
+@dataclasses.dataclass
+class HocrLine:
+    index: int
+    bbox: tuple[int, int, int, int]
+    text: str
+    words: list[HocrWord]
+
+
+@dataclasses.dataclass
+class PageOcrData:
+    text: str
+    hocr: str | None = None  # Pre-aligned hOCR, None = use approximate
 
 
 def _post_process_text(text: str | None) -> str | None:
@@ -187,6 +210,36 @@ class LlmDocumentParser(DocumentParser):
             img.save(str(converted_path), "PNG")
         return converted_path, "image/png"
 
+    def _get_image_page_count(self, image_path: Path) -> int:
+        """Return the number of frames/pages in an image (>1 for multi-page
+        TIFF, animated GIF, etc.)."""
+        from PIL import Image
+
+        try:
+            with Image.open(image_path) as img:
+                return getattr(img, "n_frames", 1)
+        except Exception:
+            return 1
+
+    def _extract_image_pages(self, image_path: Path) -> list[Path]:
+        """Extract individual pages from a multi-page image (e.g. TIFF).
+        Returns a list of PNG paths, one per page."""
+        from PIL import Image
+
+        pages: list[Path] = []
+        with Image.open(image_path) as img:
+            n_frames = getattr(img, "n_frames", 1)
+            self.log.info(
+                "Multi-page image has %d page(s), extracting frames",
+                n_frames,
+            )
+            for i in range(n_frames):
+                img.seek(i)
+                page_path = self.tempdir / f"{image_path.stem}_frame_{i}.png"
+                img.save(str(page_path), "PNG")
+                pages.append(page_path)
+        return pages
+
     def _get_image_dpi(self, image_path: Path) -> int:
         """Return image DPI or a sensible default."""
         try:
@@ -199,6 +252,414 @@ class LlmDocumentParser(DocumentParser):
             return 300
 
     # ------------------------------------------------------------------
+    # Tesseract + LLM alignment for layout-aware hOCR
+    # ------------------------------------------------------------------
+
+    def _run_tesseract_hocr(self, image_path: Path) -> str | None:
+        """Run Tesseract on the image to get hOCR with accurate bounding boxes.
+        Returns the hOCR string or None if Tesseract is unavailable or fails."""
+        self.log.debug(
+            "Running Tesseract hOCR on %s for layout alignment",
+            image_path.name,
+        )
+        try:
+            output_prefix = self.tempdir / f"tess_{image_path.stem}"
+            lang = settings.OCR_LANGUAGE
+            run_subprocess(
+                [
+                    "tesseract",
+                    str(image_path),
+                    str(output_prefix),
+                    "-l",
+                    lang,
+                    "hocr",
+                ],
+                logger=self.log,
+            )
+            hocr_file = Path(f"{output_prefix}.hocr")
+            if hocr_file.exists():
+                hocr_content = hocr_file.read_text(encoding="utf-8")
+                self.log.debug(
+                    "Tesseract hOCR generated successfully (%d bytes)",
+                    len(hocr_content),
+                )
+                return hocr_content
+            self.log.debug("Tesseract hOCR output file not found: %s", hocr_file)
+            return None
+        except FileNotFoundError:
+            self.log.info(
+                "Tesseract not found on system, skipping layout alignment "
+                "(archive PDF will use approximate text positions)",
+            )
+            return None
+        except Exception:
+            self.log.warning(
+                "Tesseract hOCR generation failed for %s",
+                image_path,
+                exc_info=True,
+            )
+            return None
+
+    def _parse_hocr_lines(
+        self,
+        hocr: str,
+    ) -> tuple[int, int, list[HocrLine]]:
+        """Parse hOCR XML and extract page dimensions and line/word data."""
+        self.log.debug("Parsing Tesseract hOCR XML (%d bytes)", len(hocr))
+        root = ET.fromstring(hocr)
+        ns = {"xhtml": "http://www.w3.org/1999/xhtml"}
+
+        # Find page element — try with and without namespace
+        page_el = root.find(".//*[@class='ocr_page']")
+        if page_el is None:
+            page_el = root.find(".//xhtml:*[@class='ocr_page']", ns)
+        if page_el is None:
+            self.log.debug("No ocr_page element found in hOCR")
+            return 0, 0, []
+
+        page_title = page_el.get("title", "")
+        page_w, page_h = 0, 0
+        bbox_match = re.search(r"bbox\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)", page_title)
+        if bbox_match:
+            page_w = int(bbox_match.group(3))
+            page_h = int(bbox_match.group(4))
+
+        lines: list[HocrLine] = []
+        line_index = 0
+
+        # Search for line elements in the tree
+        for el in root.iter():
+            el_class = el.get("class", "")
+            if "ocr_line" not in el_class and "ocr_header" not in el_class:
+                continue
+
+            title = el.get("title", "")
+            bbox_match = re.search(
+                r"bbox\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)",
+                title,
+            )
+            if not bbox_match:
+                continue
+
+            line_bbox = (
+                int(bbox_match.group(1)),
+                int(bbox_match.group(2)),
+                int(bbox_match.group(3)),
+                int(bbox_match.group(4)),
+            )
+
+            words: list[HocrWord] = []
+            for word_el in el.iter():
+                word_class = word_el.get("class", "")
+                if "ocrx_word" not in word_class:
+                    continue
+                word_title = word_el.get("title", "")
+                wbbox_match = re.search(
+                    r"bbox\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)",
+                    word_title,
+                )
+                if not wbbox_match:
+                    continue
+                word_text = (word_el.text or "") + "".join(
+                    (child.text or "") + (child.tail or "") for child in word_el
+                )
+                word_text = word_text.strip()
+                if word_text:
+                    words.append(
+                        HocrWord(
+                            bbox=(
+                                int(wbbox_match.group(1)),
+                                int(wbbox_match.group(2)),
+                                int(wbbox_match.group(3)),
+                                int(wbbox_match.group(4)),
+                            ),
+                            text=word_text,
+                        ),
+                    )
+
+            line_text = " ".join(w.text for w in words)
+            if line_text:
+                lines.append(
+                    HocrLine(
+                        index=line_index,
+                        bbox=line_bbox,
+                        text=line_text,
+                        words=words,
+                    ),
+                )
+                line_index += 1
+
+        self.log.debug(
+            "Parsed hOCR: page=%dx%d, %d lines, %d total words",
+            page_w,
+            page_h,
+            len(lines),
+            sum(len(line.words) for line in lines),
+        )
+        return page_w, page_h, lines
+
+    def _align_with_llm(
+        self,
+        image_path: Path,
+        mime_type: str,
+        tesseract_lines: list[HocrLine],
+        llm_text: str,
+    ) -> tuple[dict[int, str], list[str]]:
+        """Use the LLM to align high-quality OCR text to Tesseract bounding boxes.
+        Returns (line_index → corrected_text, extra_lines)."""
+        from llama_index.core.llms import ChatMessage
+        from llama_index.core.llms import ImageBlock
+        from llama_index.core.llms import TextBlock
+
+        self.log.debug(
+            "Starting LLM alignment: %d Tesseract lines, %d chars LLM text",
+            len(tesseract_lines),
+            len(llm_text),
+        )
+
+        tess_listing = "\n".join(
+            f'[{line.index}] "{line.text}"' for line in tesseract_lines
+        )
+
+        prompt = (
+            "You are aligning two OCR results for the same document page "
+            "shown in the image.\n\n"
+            "TESSERACT OCR (has accurate text positions but may have "
+            "text recognition errors):\n"
+            f"{tess_listing}\n\n"
+            "HIGH-QUALITY OCR (accurate text, but no position information):\n"
+            f"{llm_text}\n\n"
+            "For each numbered TESSERACT line, provide the corrected text "
+            "using the HIGH-QUALITY OCR.\n"
+            "Use the document image to verify which text corresponds to "
+            "which line.\n"
+            "If HIGH-QUALITY OCR contains text not present in any TESSERACT "
+            'line, include it in "extra".\n\n'
+            "Return ONLY valid JSON (no markdown, no code blocks):\n"
+            '{"lines": {"0": "corrected", "1": "corrected", ...}, '
+            '"extra": ["any unmatched text"]}'
+        )
+
+        try:
+            llm = self.get_multi_modal_llm()
+            messages = [
+                ChatMessage(
+                    role="user",
+                    blocks=[
+                        ImageBlock(
+                            path=str(image_path),
+                            image_mimetype=mime_type,
+                        ),
+                        TextBlock(text=prompt),
+                    ],
+                ),
+            ]
+            response = llm.chat(messages, temperature=0.0)
+            raw = str(response.message.content).strip()
+
+            # Strip markdown code fences if present
+            if raw.startswith("```"):
+                raw = re.sub(r"^```(?:json)?\s*", "", raw)
+                raw = re.sub(r"\s*```$", "", raw)
+
+            data = json.loads(raw)
+            corrections: dict[int, str] = {}
+            for k, v in data.get("lines", {}).items():
+                corrections[int(k)] = str(v)
+            extra = [str(e) for e in data.get("extra", [])]
+            self.log.debug(
+                "LLM alignment successful: %d/%d lines corrected, %d extra lines",
+                len(corrections),
+                len(tesseract_lines),
+                len(extra),
+            )
+            return corrections, extra
+        except json.JSONDecodeError:
+            self.log.warning(
+                "LLM alignment returned invalid JSON (len=%d), "
+                "falling back to approximate hOCR. Response: %.200s",
+                len(raw),
+                raw,
+            )
+            return {}, []
+        except Exception:
+            self.log.warning(
+                "LLM alignment failed, falling back to approximate hOCR",
+                exc_info=True,
+            )
+            return {}, []
+
+    def _rebuild_hocr(
+        self,
+        page_w: int,
+        page_h: int,
+        lines: list[HocrLine],
+        corrections: dict[int, str],
+        extra: list[str],
+    ) -> str:
+        """Rebuild hOCR XML using Tesseract bboxes with LLM-corrected text."""
+        import html as html_mod
+
+        self.log.debug(
+            "Rebuilding hOCR: page=%dx%d, %d lines, %d corrections, %d extra",
+            page_w,
+            page_h,
+            len(lines),
+            len(corrections),
+            len(extra),
+        )
+
+        line_elements = []
+        for line in lines:
+            corrected = corrections.get(line.index, line.text)
+            escaped = html_mod.escape(corrected)
+            words = escaped.split()
+            if not words:
+                continue
+
+            lx0, ly0, lx1, ly1 = line.bbox
+            line_w = max(lx1 - lx0, 1)
+
+            # Distribute word bboxes proportionally by character count,
+            # including spaces so that gaps appear between word boxes.
+            total_chars = max(
+                sum(len(w) for w in words) + max(len(words) - 1, 0),
+                1,
+            )
+            word_spans = []
+            char_offset = 0
+            for word in words:
+                wx0 = lx0 + (char_offset * line_w) // total_chars
+                wx1 = lx0 + ((char_offset + len(word)) * line_w) // total_chars
+                word_spans.append(
+                    f'<span class="ocrx_word" '
+                    f'title="bbox {wx0} {ly0} {wx1} {ly1}">{word}</span>',
+                )
+                char_offset += len(word) + 1  # +1 for inter-word space
+
+            line_elements.append(
+                f'<span class="ocr_line" '
+                f'title="bbox {lx0} {ly0} {lx1} {ly1}">'
+                + " ".join(word_spans)
+                + "</span>",
+            )
+
+        # Append extra text lines at the bottom of the page
+        if extra:
+            extra_y = page_h - len(extra) * 20  # rough estimate
+            for extra_line in extra:
+                if not extra_line.strip():
+                    continue
+                escaped = html_mod.escape(extra_line)
+                words = escaped.split()
+                if not words:
+                    continue
+                ey0 = max(extra_y, 0)
+                ey1 = min(extra_y + 18, page_h)
+                total_chars = max(
+                    sum(len(w) for w in words) + max(len(words) - 1, 0),
+                    1,
+                )
+                word_spans = []
+                char_offset = 0
+                for word in words:
+                    wx0 = (char_offset * page_w) // total_chars
+                    wx1 = ((char_offset + len(word)) * page_w) // total_chars
+                    word_spans.append(
+                        f'<span class="ocrx_word" '
+                        f'title="bbox {wx0} {ey0} {wx1} {ey1}">{word}</span>',
+                    )
+                    char_offset += len(word) + 1  # +1 for inter-word space
+                line_elements.append(
+                    f'<span class="ocr_line" '
+                    f'title="bbox 0 {ey0} {page_w} {ey1}">'
+                    + " ".join(word_spans)
+                    + "</span>",
+                )
+                extra_y += 20
+
+        body = "\n".join(line_elements)
+
+        return (
+            '<?xml version="1.0" encoding="UTF-8"?>\n'
+            "<!DOCTYPE html PUBLIC "
+            '"-//W3C//DTD XHTML 1.0 Transitional//EN"\n'
+            ' "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">\n'
+            '<html xmlns="http://www.w3.org/1999/xhtml">\n'
+            "<head>\n"
+            ' <meta charset="utf-8"/>\n'
+            ' <meta name="ocr-system" content="paperless-llm-aligned"/>\n'
+            "</head>\n"
+            "<body>\n"
+            f'<div class="ocr_page" title="bbox 0 0 {page_w} {page_h}; ppageno 0">\n'
+            f'<div class="ocr_carea" title="bbox 0 0 {page_w} {page_h}">\n'
+            f'<p class="ocr_par" title="bbox 0 0 {page_w} {page_h}">\n'
+            f"{body}\n"
+            "</p>\n</div>\n</div>\n"
+            "</body>\n</html>"
+        )
+
+    def _generate_aligned_hocr(
+        self,
+        image_path: Path,
+        mime_type: str,
+        llm_text: str,
+    ) -> str | None:
+        """Orchestrate Tesseract + LLM alignment for one page.
+        Returns aligned hOCR string, or None on failure (triggers fallback)."""
+        self.log.info(
+            "Attempting layout-aware hOCR alignment for %s",
+            image_path.name,
+        )
+        try:
+            hocr_raw = self._run_tesseract_hocr(image_path)
+            if hocr_raw is None:
+                self.log.info(
+                    "Tesseract unavailable — will use approximate text positions",
+                )
+                return None
+
+            page_w, page_h, lines = self._parse_hocr_lines(hocr_raw)
+            if not lines:
+                self.log.info(
+                    "No text lines found by Tesseract — will use approximate "
+                    "text positions",
+                )
+                return None
+
+            corrections, extra = self._align_with_llm(
+                image_path,
+                mime_type,
+                lines,
+                llm_text,
+            )
+            if not corrections:
+                self.log.info(
+                    "LLM alignment returned no corrections — will use "
+                    "approximate text positions",
+                )
+                return None
+
+            result = self._rebuild_hocr(
+                page_w,
+                page_h,
+                lines,
+                corrections,
+                extra,
+            )
+            self.log.info(
+                "Layout-aware hOCR alignment completed successfully (%d bytes hOCR)",
+                len(result),
+            )
+            return result
+        except Exception:
+            self.log.warning(
+                "Aligned hOCR generation failed — will use approximate text positions",
+                exc_info=True,
+            )
+            return None
+
+    # ------------------------------------------------------------------
     # Archive PDF creation
     # ------------------------------------------------------------------
 
@@ -206,19 +667,19 @@ class LlmDocumentParser(DocumentParser):
         self,
         document_path: Path,
         mime_type: str,
-        page_texts: list[str],
+        page_data_list: list[PageOcrData],
     ) -> Path:
         """Create a searchable PDF/A archive using ocrmypdf with our LLM
         text injected via a custom OCR engine plugin."""
         import ocrmypdf
 
-        from paperless_llm.ocrmypdf_engine import page_text_store
+        from paperless_llm.ocrmypdf_engine import page_data_store
 
         archive_path = Path(self.tempdir) / "archive.pdf"
 
-        # Load the pre-computed texts into the shared store so the engine
+        # Load the pre-computed page data into the shared store so the engine
         # can return them page-by-page.
-        page_text_store.set_texts(page_texts)
+        page_data_store.set_pages(page_data_list)
 
         ocrmypdf_args = {
             "input_file": str(document_path),
@@ -295,18 +756,18 @@ class LlmDocumentParser(DocumentParser):
             self.settings.llm_ocr_model,
         )
 
+        # --- Step 1: Extract text via LLM OCR ---
+        page_data_list: list[PageOcrData] | None = None
         try:
             if self._is_image(mime_type):
-                prepared_path, prepared_mime = self._prepare_image(
+                page_data_list = self._parse_image_pages(
                     document_path,
                     mime_type,
                 )
-                page_text = self._ocr_image(prepared_path, mime_type=prepared_mime)
-                page_texts = [page_text]
-                self.text = page_text
+                self.text = "\n\n".join(p.text for p in page_data_list)
             elif mime_type == "application/pdf":
-                page_texts = self._parse_pdf_pages(document_path)
-                self.text = "\n\n".join(page_texts)
+                page_data_list = self._parse_pdf_pages(document_path)
+                self.text = "\n\n".join(p.text for p in page_data_list)
             else:
                 self.log.warning(
                     "Unsupported mime type for LLM OCR: %s",
@@ -314,41 +775,149 @@ class LlmDocumentParser(DocumentParser):
                 )
                 self.text = ""
                 return
-
-            # Create searchable archive unless configured to always skip
-            if skip_archive_file != ArchiveFileChoices.ALWAYS:
-                self.archive_path = self._create_archive_pdf(
-                    document_path,
-                    mime_type,
-                    page_texts,
-                )
-                self.log.debug("Created archive PDF at %s", self.archive_path)
         except Exception as e:
-            self.log.exception("LLM OCR parsing failed: %s", e, exc_info=True)
-            # Fall back to any text we got from the original PDF
+            self.log.exception("LLM OCR text extraction failed: %s", e)
             if original_has_text:
                 self.text = text_original
             else:
                 self.text = ""
+            return
 
-    def _parse_pdf_pages(self, document_path: Path) -> list[str]:
+        self.log.debug(
+            "LLM OCR extracted %d chars of text from %d page(s)",
+            len(self.text),
+            len(page_data_list),
+        )
+
+        # --- Step 2: Create searchable archive PDF ---
+        # This is separate so that a failure here does not wipe self.text.
+        if skip_archive_file != ArchiveFileChoices.ALWAYS:
+            try:
+                self.archive_path = self._create_archive_pdf(
+                    document_path,
+                    mime_type,
+                    page_data_list,
+                )
+                self.log.debug(
+                    "Created archive PDF at %s",
+                    self.archive_path,
+                )
+            except Exception as e:
+                self.log.exception(
+                    "Archive PDF creation failed (text is preserved): %s",
+                    e,
+                )
+
+        # Final safeguard: self.text must never be None
+        if self.text is None:
+            self.log.warning(
+                "self.text is unexpectedly None after parse — setting to empty",
+            )
+            self.text = ""
+
+    def _parse_image_pages(
+        self,
+        document_path: Path,
+        mime_type: str,
+    ) -> list[PageOcrData]:
+        """Process an image file (possibly multi-page TIFF/GIF).
+        Returns list of per-page PageOcrData."""
+        n_pages = self._get_image_page_count(document_path)
+
+        if n_pages > 1:
+            # Multi-page image (e.g. TIFF)
+            self.log.info(
+                "Multi-page %s with %d pages, processing each page",
+                mime_type,
+                n_pages,
+            )
+            frame_paths = self._extract_image_pages(document_path)
+            results: list[PageOcrData] = []
+            for i, frame_path in enumerate(frame_paths):
+                self.log.debug(
+                    "Processing image page %d/%d",
+                    i + 1,
+                    len(frame_paths),
+                )
+                page_text = self._ocr_image(frame_path, mime_type="image/png")
+                self.log.debug(
+                    "Image page %d LLM OCR returned %d chars",
+                    i + 1,
+                    len(page_text),
+                )
+                aligned_hocr = self._generate_aligned_hocr(
+                    frame_path,
+                    "image/png",
+                    page_text,
+                )
+                results.append(PageOcrData(text=page_text, hocr=aligned_hocr))
+                self.log.debug(
+                    "Image page %d hOCR: %s",
+                    i + 1,
+                    "aligned" if aligned_hocr else "approximate (fallback)",
+                )
+                self.progress(i + 1, len(frame_paths))
+            return results
+
+        # Single-page image
+        prepared_path, prepared_mime = self._prepare_image(
+            document_path,
+            mime_type,
+        )
+        page_text = self._ocr_image(prepared_path, mime_type=prepared_mime)
+        self.log.debug("Image LLM OCR returned %d chars", len(page_text))
+        aligned_hocr = self._generate_aligned_hocr(
+            prepared_path,
+            prepared_mime,
+            page_text,
+        )
+        self.log.info(
+            "Image hOCR: %s",
+            "aligned" if aligned_hocr else "approximate (fallback)",
+        )
+        return [PageOcrData(text=page_text, hocr=aligned_hocr)]
+
+    def _parse_pdf_pages(self, document_path: Path) -> list[PageOcrData]:
         """Convert PDF pages to images and OCR each page.
-        Returns the list of per-page texts."""
+        Returns the list of per-page PageOcrData."""
         from pdf2image import convert_from_path
 
-        pages = convert_from_path(str(document_path), dpi=300)
+        pages = convert_from_path(str(document_path), dpi=200)
         self.log.info("PDF has %d page(s), processing with LLM OCR", len(pages))
 
-        texts = []
+        results: list[PageOcrData] = []
         for i, page_image in enumerate(pages):
             image_path = self.tempdir / f"page_{i}.png"
             page_image.save(str(image_path), "PNG")
             self.log.debug("Processing page %d/%d", i + 1, len(pages))
             page_text = self._ocr_image(image_path, mime_type="image/png")
-            texts.append(page_text)
+            self.log.debug(
+                "Page %d LLM OCR returned %d chars",
+                i + 1,
+                len(page_text),
+            )
+            aligned_hocr = self._generate_aligned_hocr(
+                image_path,
+                "image/png",
+                page_text,
+            )
+            results.append(PageOcrData(text=page_text, hocr=aligned_hocr))
+            self.log.debug(
+                "Page %d hOCR: %s",
+                i + 1,
+                "aligned" if aligned_hocr else "approximate (fallback)",
+            )
             self.progress(i + 1, len(pages))
 
-        return texts
+        aligned_count = sum(1 for r in results if r.hocr is not None)
+        self.log.info(
+            "PDF processing complete: %d pages, %d with aligned hOCR, "
+            "%d with approximate hOCR",
+            len(results),
+            aligned_count,
+            len(results) - aligned_count,
+        )
+        return results
 
     # ------------------------------------------------------------------
     # Thumbnail / metadata
