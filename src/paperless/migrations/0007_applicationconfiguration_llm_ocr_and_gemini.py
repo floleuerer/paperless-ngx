@@ -18,7 +18,7 @@ class Migration(migrations.Migration):
                 choices=[
                     ("openai", "OpenAI"),
                     ("huggingface", "Huggingface"),
-                    ("google_genai", "Google GenAI"),
+                    ("gemini", "Gemini"),
                 ],
                 max_length=128,
                 null=True,

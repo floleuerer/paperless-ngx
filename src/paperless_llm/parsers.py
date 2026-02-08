@@ -37,13 +37,15 @@ class LlmDocumentParser(DocumentParser):
     logging_name = "paperless.parsing.llm"
 
     # MIME types natively supported by most vision LLMs
-    NATIVE_IMAGE_TYPES = frozenset({
-        "image/png",
-        "image/jpeg",
-        "image/webp",
-        #"image/heic",
-        #"image/heif",
-    })
+    NATIVE_IMAGE_TYPES = frozenset(
+        {
+            "image/png",
+            "image/jpeg",
+            "image/webp",
+            # "image/heic",
+            # "image/heif",
+        },
+    )
 
     def get_settings(self) -> LlmOcrConfig:
         return LlmOcrConfig()
@@ -70,7 +72,7 @@ class LlmDocumentParser(DocumentParser):
             from llama_index.llms.openai import OpenAI
 
             return OpenAI(
-                model=self.settings.llm_ocr_model or "gpt-4o",
+                model=self.settings.llm_ocr_model or "gpt-5-mini",
                 api_key=self.settings.llm_ocr_api_key,
                 api_base=self.settings.llm_ocr_endpoint or None,
             )
@@ -97,7 +99,9 @@ class LlmDocumentParser(DocumentParser):
 
     def _ocr_image(self, image_path: Path, mime_type: str) -> str:
         """Send a single image to the multi-modal LLM for OCR."""
-        from llama_index.core.llms import ChatMessage, TextBlock, ImageBlock
+        from llama_index.core.llms import ChatMessage
+        from llama_index.core.llms import ImageBlock
+        from llama_index.core.llms import TextBlock
 
         llm = self.get_multi_modal_llm()
 
@@ -121,7 +125,7 @@ class LlmDocumentParser(DocumentParser):
                     ImageBlock(path=str(image_path), image_mimetype=mime_type),
                     TextBlock(text=prompt),
                 ],
-            )
+            ),
         ]
         response = llm.chat(messages, temperature=0.0)
         return str(response.message.content).strip()
@@ -255,8 +259,7 @@ class LlmDocumentParser(DocumentParser):
         if mime_type == "application/pdf":
             text_original = self._extract_text_pdftotext(document_path)
             original_has_text = (
-                text_original is not None
-                and len(text_original) > VALID_TEXT_LENGTH
+                text_original is not None and len(text_original) > VALID_TEXT_LENGTH
             )
 
         # If PDF already has text and we should skip the archive, we are done.
@@ -321,7 +324,7 @@ class LlmDocumentParser(DocumentParser):
                 )
                 self.log.debug("Created archive PDF at %s", self.archive_path)
         except Exception as e:
-            self.log.error("LLM OCR parsing failed: %s", e, exc_info=True)
+            self.log.exception("LLM OCR parsing failed: %s", e, exc_info=True)
             # Fall back to any text we got from the original PDF
             if original_has_text:
                 self.text = text_original
